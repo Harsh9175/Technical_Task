@@ -62,6 +62,7 @@ Create a Jenkins Pipeline Script: Use the jenkins-pipeline file to create the pi
 
 Install Required Jenkins Plugins: Make sure to install the following plugins for a seamless CI/CD process:
 
+    Deploy to container
     Docker Pipeline
     Pipeline and Build Tools
     AWS Integration
