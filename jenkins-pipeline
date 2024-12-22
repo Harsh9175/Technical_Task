@@ -1,0 +1,94 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_IMAGE_TAG = "${env.BUILD_ID}" // Docker image tag (unique per build)
+        TERRAFORM_DIR = 'terraform/' // Path to your Terraform scripts
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/your-repo/your-repo.git' // Update with your GitHub repository URL
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir(env.TERRAFORM_DIR) {
+                    sh 'terraform init'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir(env.TERRAFORM_DIR) {
+                    sh 'terraform plan -out=tfplan'
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir(env.TERRAFORM_DIR) {
+                    script {
+                        sh 'terraform apply -auto-approve tfplan'
+                        
+                        // Fetch the ECR repository name from Terraform output
+                        def ecrRepoName = sh(script: 'terraform output -raw ecr_repo_name', returnStdout: true).trim()
+                        env.ECR_REPO_NAME = ecrRepoName
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    withAWS(credentials: env.AWS_CREDENTIALS_ID, region: env.AWS_REGION) {
+                        sh "docker build -t ${env.ECR_REPO_NAME}:python-ecr ." // Give desire name
+                    }
+                }
+            }
+        }
+
+        stage('Push to AWS ECR') {
+            steps {
+                script {
+                    withAWS(credentials: env.AWS_CREDENTIALS_ID, region: env.AWS_REGION) {
+                        sh "${aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${awsAccountId}.dkr.ecr.${AWS_REGION}.amazonaws.com}"
+                        sh "docker tag ${env.ECR_REPO_NAME}:${env.DOCKER_IMAGE_TAG} ${awsAccountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:python-ecr"
+                        sh "docker push ${awsAccountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:python-ecr"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Lambda Function') {
+            steps {
+                script {
+                    sh "aws lambda update-function-code --function-name my-lambda-function --image-uri ${awsAccountId}.dkr.ecr.${AWS_REGION}.amazonaws.com/${env.ECR_REPO_NAME}:python-ecr --region ${AWS_REGION}"
+                }
+            }
+        }
+
+        stage('Test Lambda Function') {
+            steps {
+                script {
+                    sh "aws lambda invoke --function-name my-lambda-function --payload '{}' output.json --region ${AWS_REGION}"
+                    sh "cat output.json"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline executed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check the logs for details.'
+        }
+    }
+}
